@@ -86,24 +86,74 @@ int main(int argc, char *argv[])
         exit(-1);
     }
 
-    printf("New termios structure set\n");
+    printf("New termios structure set\n\n");
 
     // Loop for input
     unsigned char buf[BUF_SIZE + 1] = {0}; // +1: Save space for the final '\0' char
 
-    while (STOP == FALSE)
+
+//------------------------------------------------------------------------
+// -------------Maquina de estados implementada na aula 2-----------------   
+//------------------------------------------------------------------------
+
+int estado = 0;
+unsigned char current = 0;
+
+while(1)
+{
+    read(fd, &current, 1);
+
+    switch (estado)
     {
-        // Returns after 5 chars have been input
-        int bytes = read(fd, buf, BUF_SIZE);
-        buf[bytes] = '\0'; // Set end of string to '\0', so we can printf
-        for (int i=0;i<5;i++) {
-        printf("buf = 0x%02X\n", buf[i]);
-    }
-       // if (buf[0] == 'z')
-            STOP = TRUE;
+        case(0):
+            if(current==0x7E) estado = 1;
+
+            printf("Start\t");    
+        break;
+
+        case(1):
+            if(current == 0x7E) estado = 1;
+            else if(current == 0x03) estado = 2;
+            else estado = 0;
+            
+            printf("FLAG_RCV\t");
+        break;
+
+        case (2):
+            if(current == 0x7E) estado = 1;
+            else if(current == 0x03) estado = 3;
+            else estado = 0;
+        
+            printf("A RCV\t");
+        break;
+
+        case (3):
+            if(current == 0x7E) estado = 1;
+            else if(current == 0x00) estado = 4;
+            else  estado = 0;
+        
+            printf("C RCV\t");
+        break;
+
+        case (4):
+            if(current == 0x7E) estado = 5;
+            else estado = 0;
+
+            printf("BCC OK\t");
+        break;
+
+        case (5):
+            printf("STOP\n");
     }
 
+    printf("0x%02X\n\n", current);
+    if(estado == 5) break;
+}   
 
+//-----------------------------------------------------------------------------
+// -------------Fim da maquina de estados implementada na aula 2---------------
+//-----------------------------------------------------------------------------
+        
     //Create string to send
    
     buf[0]=0x7E;
@@ -112,13 +162,14 @@ int main(int argc, char *argv[])
     buf[3]=0x01^0x07;
     buf[4]=0x7E;
 
+
     // In non-canonical mode, '\n' does not end the writing.
     // Test this condition by placing a '\n' in the middle of the buffer.
     // The whole buffer must be sent even with the '\n'.
     //buf[5] = '\n';
 
     int bytes = write(fd, buf, BUF_SIZE);
-    printf("%d bytes written\n", bytes);
+    printf("\n%d bytes written\n", bytes);
 
     // Wait until all bytes have been written to the serial port
     sleep(1);
