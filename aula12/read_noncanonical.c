@@ -19,7 +19,7 @@
 #define FALSE 0
 #define TRUE 1
 
-#define BUF_SIZE 256
+#define BUF_SIZE 5
 
 volatile int STOP = FALSE;
 
@@ -108,7 +108,7 @@ while(1)
         case(0):
             if(current==0x7E) estado = 1;
 
-            printf("Start\t");    
+            printf("Start\t\n");    
         break;
 
         case(1):
@@ -116,7 +116,7 @@ while(1)
             else if(current == 0x03) estado = 2;
             else estado = 0;
             
-            printf("FLAG_RCV\t");
+            printf("FLAG_RCV\t\n");
         break;
 
         case (2):
@@ -124,7 +124,7 @@ while(1)
             else if(current == 0x03) estado = 3;
             else estado = 0;
         
-            printf("A RCV\t");
+            printf("A RCV\t\n");
         break;
 
         case (3):
@@ -132,22 +132,26 @@ while(1)
             else if(current == 0x00) estado = 4;
             else  estado = 0;
         
-            printf("C RCV\t");
+            printf("C RCV\t\n");
         break;
 
         case (4):
             if(current == 0x7E) estado = 5;
             else estado = 0;
 
-            printf("BCC OK\t");
+            printf("BCC OK\t\n");
         break;
 
         case (5):
-            printf("STOP\n");
+            
+        break;
     }
 
-    printf("0x%02X\n\n", current);
-    if(estado == 5) break;
+    printf("0x%02X   ->  ", current);
+    if(estado == 5){
+        printf("STOP\n");
+        break;
+    }
 }   
 
 //-----------------------------------------------------------------------------
@@ -161,6 +165,7 @@ while(1)
     buf[2]=0x07;
     buf[3]=0x01^0x07;
     buf[4]=0x7E;
+    
 
 
     // In non-canonical mode, '\n' does not end the writing.
@@ -169,7 +174,96 @@ while(1)
     //buf[5] = '\n';
 
     int bytes = write(fd, buf, BUF_SIZE);
-    printf("\n%d bytes written\n", bytes);
+    printf("\n%d bytes written\n\n", bytes);
+
+
+//-----------------------------------------------------------------------------
+// -----------------------------------AULA 3-----------------------------------  
+//-----------------------------------------------------------------------------
+    int pointer =0;
+    estado = 0;
+    
+
+
+    unsigned char new[5];
+    while(1)
+    {
+        read(fd, &current, 1);
+    
+        switch (estado)
+        {
+            case(0):
+                if(current==0x7E) estado = 1;
+    
+                printf("Start\t\n");    
+            break;
+    
+            case(1):
+                if(current == 0x7E) estado = 1;
+                else if(current == 0x03) estado = 2;
+                else estado = 0;
+                
+                printf("FLAG_RCV\t\n");
+            break;
+    
+            case (2):
+                if(current == 0x7E) estado = 1;
+                else if(current == 0x03) estado = 3;
+                else estado = 0;
+            
+                printf("A RCV\t\n");
+            break;
+    
+            case (3):
+                if(current == 0x7E) estado = 1;
+                else if(current == 0x00) estado = 4;
+                else  estado = 0;
+            
+                printf("C RCV\t\n");
+            break;
+    
+    
+            case (4):
+                if(current!=0x7E){
+                    new[pointer]= current;
+                    pointer ++;
+
+                }
+                else if(current==0x7E){
+                    if(new[5]==new[1]^new[2]^new[3]^new[4])
+                {
+                    printf("BCC2\t\n");
+                    estado=5;
+                }
+                else  printf("BCC2 NOT OK\t\n");
+                }
+                
+            break;
+        }
+    
+        printf("0x%02X   ->  ", current);
+        if(estado == 5){
+            printf("MESSAGE SENT:");
+                    for (int i = 0; i<5;i++) {printf("%c",new[i]);}
+                    printf("\n");
+            printf("STOP\n");
+            break;
+        }
+    }  
+
+
+
+
+
+
+//-----------------------------------------------------------------------------
+// -----------------------------------AULA 3-----------------------------------  
+//-----------------------------------------------------------------------------
+
+
+
+
+
 
     // Wait until all bytes have been written to the serial port
     sleep(1);
