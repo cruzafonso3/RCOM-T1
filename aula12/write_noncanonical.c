@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
+#include <signal.h>
 
 // Baudrate settings are defined in <asm/termbits.h>, which is
 // included by <termios.h>
@@ -23,8 +24,19 @@
 
 volatile int STOP = FALSE;
 
+int alarmEnabled = FALSE;
+int alarmCount = 0;
+
+void alarmHandler(int signal)   // User-defined function to handle alarms (handler function)
+{          
+                      // This function will be called when the alarm is triggered
+alarmEnabled = TRUE;           // Can be used to change a flag that increases the number of alarms
+
+}
+
 int main(int argc, char *argv[])
 {
+    (void) signal(SIGALRM, alarmHandler);
     // Program usage: Uses either COM1 or COM2
     const char *serialPortName = argv[1];
 
@@ -37,10 +49,13 @@ int main(int argc, char *argv[])
                argv[0]);
         exit(1);
     }
+    
 
     // Open serial port device for reading and writing, and not as controlling tty
     // because we don't want to get killed if linenoise sends CTRL-C.
     int fd = open(serialPortName, O_RDWR | O_NOCTTY);
+
+    fcntl (fd, F_SETFL, O_NONBLOCK);
 
     if (fd < 0)
     {
@@ -103,33 +118,134 @@ int main(int argc, char *argv[])
     buf[2]= 0x03;
     buf[3]= 0x03 ^ 0x03;
     buf[4]= 0x7E;
-
-
-
     // In non-canonical mode, '\n' does not end the writing.
     // Test this condition by placing a '\n' in the middle of the buffer.
     // The whole buffer must be sent even with the '\n'.
-    buf[5] = '\n';
+   
 
     int bytes = write(fd, buf, BUF_SIZE);
+    //int bytes = 0;
     printf("%d bytes written\n", bytes);
 
-    // Returns after 5 chars have been input
-     bytes = read(fd, buf, BUF_SIZE);
-    buf[bytes] = '\0'; // Set end of string to '\0', so we can printf
+//------------------------------------------------------------------------
+// -------------Maquina de estados implementada na aula 2-----------------   
+//------------------------------------------------------------------------
 
-    printf(":%s:%d\n", buf, bytes);
+int estado = 0;
+unsigned char current;
+alarm(3);
 
-    for (int i = 0; i < 5; i++)
-    {
-        printf("buf=0x%02X \n", buf[i]);
-      
+while(1) 
+{
+    
+    if (alarmCount == 4 && alarmEnabled == TRUE){
+        alarm (0);
+        break;
     }
+
+    if (alarmEnabled == TRUE && alarmCount < 4)
+    {
+        alarmCount++;
+        printf("Alarm #%d\n", alarmCount);
+        printf("RESENDING__\n"); 
+        alarmEnabled = FALSE;
+        bytes = 0;
+        write(fd, buf, BUF_SIZE);
+        printf("%d bytes written\n\n", bytes);
+        alarm(3); 
+        estado = 0;
+        continue;
+    }
+    if (alarmEnabled == FALSE){
+        if(read(fd, &current, 1) == -1){continue;}
+    }
+
     
 
 
+
+    switch (estado)
+    {
+        case(0):
+            if(current==0x7E) estado = 1;
+
+            printf("Start\t\n");    
+        break;
+
+        case(1):
+            if(current == 0x7E) estado = 1;
+            else if(current == 0x01) estado = 2;
+            else estado = 0;
+            
+            printf("FLAG_RCV\t\n");
+        break;
+
+        case (2):
+            if(current == 0x7E) estado = 1;
+            else if(current == 0x07) estado = 3;
+            else estado = 0;
+        
+            printf("A RCV\t\n");
+        break;
+
+        case (3):
+            if(current == 0x7E) estado = 1;
+            else if(current == 0x01^0x07) estado = 4;
+            else  estado = 0;
+        
+            printf("C RCV\t\n");
+        break;
+
+        case (4):
+            if(current == 0x7E) estado = 5;
+            else estado = 0;
+
+            printf("BCC OK\t\n");
+        break;
+
+        case (5):
+            
+
+        break;
+    }
+
+    printf("0x%02X   ->  ", current);
+    if(estado == 5) 
+    {
+        printf("STOP\n\n");
+        break;
+        alarm(0);
+    }
+    
+ 
+}
+
+
+//-----------------------------------------------------------------------------
+// -------------Fim da maquina de estados implementada na aula 2---------------
+//-----------------------------------------------------------------------------
+    
+
+
+
+
+
+//-----------------------------------------------------------------------------
+// -----------------------------------AULA 3-----------------------------------  
+//-----------------------------------------------------------------------------
+
+unsigned char buff[10] = {0x7E,0x03,0x03,0x03 ^ 0x03,'D','R','I','P','D'^'R'^'I'^'P',0x7E};
+   
+int bytes1 = write(fd, buff, 10);
+printf("NEW FSM\n\t%d bytes written\n", bytes1);
+
+//-----------------------------------------------------------------------------
+// -----------------------------------AULA 3-----------------------------------  
+//-----------------------------------------------------------------------------
+
+
     // Wait until all bytes have been written to the serial port
-    sleep(1);
+    //sleep(1);
 
     // Restore the old port settings
     if (tcsetattr(fd, TCSANOW, &oldtio) == -1)
