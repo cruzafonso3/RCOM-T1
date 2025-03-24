@@ -31,9 +31,9 @@ int alarmCount = 0;
 int ab = 0;
 int fd = 0;
 int identifier = 0;  //  = 0 se I(0) e = 1 se I(1)
-int control = 1;
+int control = 1; // 1 se já tiver sido mandado um controlo e 0 se ainda não tiver sido mandado
 
-// Copied from the code given by professors
+
 int startconnection(const char *serialPort) {
 
     fd = open(serialPort, O_RDWR | O_NOCTTY);
@@ -42,8 +42,6 @@ int startconnection(const char *serialPort) {
         perror(serialPort);
         return -1; 
     }
-
-    // Save current port settings
     struct termios oldtio;
     struct termios newtio;
 
@@ -52,41 +50,25 @@ int startconnection(const char *serialPort) {
         perror("tcgetattr");
         exit(-1);
     }
-
-    // Clear struct for new port settings
+    
     memset(&newtio, 0, sizeof(newtio));
-
     newtio.c_cflag = BAUDRATE | CS8 | CLOCAL | CREAD;
     newtio.c_iflag = IGNPAR;
     newtio.c_oflag = 0;
-
-    // Set input mode (non-canonical, no echo,...)
     newtio.c_lflag = 0;
-    newtio.c_cc[VTIME] = 0; // Inter-character timer unused
+    newtio.c_cc[VTIME] = 0;
     newtio.c_cc[VMIN] = 0;  
-
-    // VTIME e VMIN should be changed in order to protect with a
-    // timeout the reception of the following character(s)
-
-    // Now clean the line and activate the settings for the port
-    // tcflush() discards data written to the object referred to
-    // by fd but not transmitted, or data received but not read,
-    // depending on the value of queue_selector:
-    //   TCIFLUSH - flushes data received but not read.
-
     tcflush(fd, TCIOFLUSH);
-
-    // Set new port settings
     if (tcsetattr(fd, TCSANOW, &newtio) == -1) {
         perror("tcsetattr");
         return -1;
     }
-    
     return fd;
 }
 
 void alarmHandler(int signal) {
-    alarmEnabled = TRUE;    
+    alarmEnabled = TRUE;  
+    alarmCount++;  
 }       
 
 ////////////////////////////////////////////////
@@ -120,15 +102,16 @@ int llopen(LinkLayer connectionParameters)
     
         while(1) {
             if (alarmEnabled) {
-                alarmCount++;
-                printf("Alarm #%d\n", alarmCount);
-    
-                if (alarmCount >= 4) {
-                    printf("Maximum attempts reached. Aborting.\n");
-                    break;
-                }
-                printf("RESENDING...\n\n");
+                
                 write(fd, buf, BUF_SIZE);
+    
+                if (alarmCount > 3) {
+                    printf("Maximum attempts reached. Aborting.\n");
+                    return -1;
+                }
+                printf("Alarm #%d\n", alarmCount);
+                printf("WAITING RESPONSE...\n\n");
+                
 
                 alarmEnabled = FALSE;
                 alarm(3);
@@ -274,168 +257,168 @@ int llopen(LinkLayer connectionParameters)
 ////////////////////////////////////////////////
 
 int llwrite(const unsigned char *buf, int bufSize) {
-    
-    int packet_size = bufSize + 100; // Tamanho máximo do pacote
-    unsigned char packet[packet_size];
-    unsigned int finalsize = 4; // FLAG + A + C + BCC1
 
-    // Supervision frame
-    packet[0] = 0x7E; // FLAG
-    packet[1] = 0x03; // A
+    alarmCount = 0;
+    alarmEnabled = FALSE;
+
+    int packet_size = bufSize + 100; 
+    unsigned char packet[packet_size];
+    unsigned int finalsize = 4;
+    
+    packet[0] = 0x7E; 
+    packet[1] = 0x03; 
     if (identifier == 0) {
         packet[2] = 0x00; // C - I (0)
-        //identifier = 1;
+        identifier = 1;
     } else {
         packet[2] = 0x40; // C - I (1)
-        //identifier = 0;
+        identifier = 0;
     }
-    packet[3] = packet[2] ^ packet[1]; // BCC1
+    packet[3] = packet[2] ^ packet[1]; 
 
-    // Tratamento de escape e cópia dos dados
-    int j = 4; // Índice para escrever no pacote
+    int j = 4;
     for (int i = 0; i < bufSize; i++) {
         if (buf[i] == 0x7E) {
-            packet[j++] = 0x7D; // ESCAPE
-            packet[j++] = 0x5E; // 0x7E escapado
+            packet[j++] = 0x7D;
+            packet[j++] = 0x5E; 
             finalsize += 2;
         } else if (buf[i] == 0x7D) {
-            packet[j++] = 0x7D; // ESCAPE
-            packet[j++] = 0x5D; // 0x7D escapado
+            packet[j++] = 0x7D; 
+            packet[j++] = 0x5D; 
             finalsize += 2;
         } else {
-            packet[j++] = buf[i]; // Dados normais
+            packet[j++] = buf[i]; 
             finalsize++;
         }
     }
-    packet[j++] = 0x7E; // FLAG final
-    finalsize++;
-    if(control == 0) {
-        printf("\n\n---------------------------CONTROL PACK LLWRITE: %d ---------------------------\n\n",finalsize);
-    }
-    else printf("\n\n---------------------------STARTING LLWRITE: packet with %d bytes---------------------------\n\n", finalsize-12);
 
+    packet[j++] = 0x7E;
+    finalsize++;
+    if(control == 0) printf("\n\n---------------------------CONTROL PACK LLWRITE: %d ---------------------------\n\n",finalsize);
+    else printf("\n\n---------------------------STARTING LLWRITE: packet with %d bytes---------------------------\n\n", finalsize-12);
     for (int i = 0; i < finalsize; i++)  printf("0x%02X ", packet[i]);
     printf("\n------------------------------------\n\n");
-    // Calcula BCC2
+    
     int BCC2 = 0;
-    for (int i = 0; i < bufSize; i++) {
-        BCC2 ^= buf[i];
-    }
-    packet[j++] = BCC2; // BCC2
-    packet[j++] = 0x7E; // FLAG final
+    for (int i = 0; i < bufSize; i++)  BCC2 ^= buf[i];
+    
+    packet[j++] = BCC2; 
+    packet[j++] = 0x7E; 
     finalsize += 2;
 
-    // Lógica de envio e retransmissão
     int estado = 0;
     unsigned char current = 0;
     int attempts = 0;
+    int RRorREJ = 0;
 
-    while (attempts < 3) { // Número máximo de tentativas
-        // Envia o pacote
+    while (attempts < 3) { 
         int bytes = write(fd, packet, finalsize-2);
         printf("%d bytes sent\n", bytes-12);
 
-        // Configura o alarme para 3 segundos
         alarmEnabled = TRUE;
         alarm(3);
 
-        // Aguarda resposta
         printf("Waiting for RR or REJ\n");
         while (1) {
-            /*
+            
+            
             if (alarmEnabled) {
-                alarmCount++;
-                printf("Alarm #%d\n", alarmCount);
 
-                if (alarmCount >= 4) {
+                
+                
+
+                if (alarmCount >= 5){
                     printf("Maximum attempts reached. Aborting.\n");
                     return -1; // Falha após 3 tentativas
                 }
 
-                printf("RESENDING...\n\n");
-                write(fd, packet, finalsize); // Retransmite o pacote
+                printf("Alarm #%d\n", alarmCount);
+                if(alarmEnabled && alarmCount>0) write(fd, packet, finalsize); 
+                if(alarmEnabled && alarmCount>0) printf("RESENDING...\n\n");
+                
+                
 
                 alarmEnabled = FALSE;
                 alarm(3); // Reinicia o alarme
             }
-*/
-            // Lê a resposta do receptor
+
             if (read(fd, &current, 1) > 0) {
-
-
                 switch (estado) {
-                    case 0: // START
-                        if (current == 0x7E) {
-                            estado = 1; // FLAG_RCV
-                            
-                            
-                        }
-                        break;
+                    case 0:
 
-                    case 1: // FLAG_RCV
+                        if (current == 0x7E) estado = 1; 
+
+                    break;
+
+                    case 1: 
+
                         printf("FLAG_RCV\n");
-                        if (current == 0x01) { // A (Endereço)
-                            estado = 2; // A_RCV
-                           
-                        } else if (current == 0x7E) {
-                            estado = 1; // Nova FLAG
-                        } else {
-                            estado = 0; // Reinicia
-                        }
-                        break;
+                        if (current == 0x01) estado = 2;   
+                        else if (current == 0x7E) estado = 1; 
+                        else estado = 0;
 
-                    case 2: // A_RCV
-                    printf("A_RCV\n");
-                        if ((identifier == 0 || current == 0x05) || (identifier== 1 ||current == 0x85)) { // C (Controlo) // MUDAR ISTO PARA && !!!!!!!!!!!!!!!!!!!!!!!!!
-                            estado = 3; // C_RCV
-                            
-                        } else if (current == 0x7E) {
-                            estado = 1; // Nova FLAG
-                        } else {
-                            estado = 0; // Reinicia
-                        }
-                        break;
+                    break;
 
-                    case 3: // C_RCV
-                    printf("C_RCV\n");
-                        if (current == 0x04 || current == 0x84 ) { // BCC1_OK
-                            estado = 4; // BCC1_OK
-                            
-                        } else {
-                            estado = 0; // Reinicia
-                        }
-                        break;
+                    case 2:
 
-                    case 4: // BCC1_OK
-                    printf("BCC1_OK\n");
-                        if (current == 0x7E) { // FLAG final
-                            estado = 5; // STOP
+                        printf("A_RCV\n");
+                        if ((current == 0x05) || (current == 0x85)) {
+                            RRorREJ = 0;
+                            estado = 3;
+                            printf("RR(%d) Recieved\n",identifier);
+
+                        } 
+                        
+                        else if ((current == 0x01) || (current == 0x81)) {
+                            RRorREJ = 1;
+                            estado = 3;   
+                            printf("REJ(%d) Recieved\n",identifier);
+
+                        } 
+
+
+                        else if (current == 0x7E) estado = 1; 
+                        else estado = 0;
+
+                    break;
+
+                    case 3: 
+
+                        printf("C_RCV\n");
+                        if (current == 0x04 || current == 0x84 ) estado = 4;
+                        else estado = 0; 
+
+                    break;
+
+                    case 4:
+
+                        printf("BCC1_OK\n");
+                        if (current == 0x7E) { 
+                            estado = 5; 
                             printf("STOP\n");
                         }
-                        break;
+                    break;
                 }
 
                 if (estado == 5) {
-                    // Confirmação recebida (RR)
-                    alarm(0); // Cancela o alarme
-                    /*if(identifier == 0) //identifier = 1;
-                    else identifier = 0;*/
-                    printf("-------- Success: Packet I(%d) read -------\n",identifier);
+                    alarm(0); 
+                    
+                    if(RRorREJ==0) printf("-------- Success: Packet I(%d) read -------\n",identifier);
+                    if(RRorREJ==1) printf("-------- Error: Packet I(%d) read -------\n",identifier);
                     if(control == 0) control = 1;
                     alarmCount = 0;
-
-                    return 1; // Sucesso
                     
+                    return 1; 
                 }
-                printf("0x%02X   ->  ", current); 
+         //     printf("0x%02X   ->  ", current); 
             }
         }
-
-        attempts++; // Incrementa o número de tentativas
+        attempts++; 
     }
     printf("Maximum attempts reached. Aborting.\n");
-    return -1; // Falha
+    return -1;
 }
+
 
 
 
@@ -487,37 +470,43 @@ int llread(unsigned char *buf) {
             int finishnamefile = 0;
             switch (estado)
             {
-                case 0: // START
+                case 0:
+
                     if(current==0x7E) estado = 1;
+
                 break;
                     
 
-                case 1: // FLAG_RCV
+                case 1:
+
                     if(current == 0x7E) estado = 1;
                     else if(current == 0x03) estado = 2;
                     else estado = 0;
                     printf("FLAG_RCV\t\n");
+
                 break;
 
-                case 2: //A_RCV
+                case 2:
+
                     if(current == 0x7E) estado = 1;
                     else if(current == 0x00 || current == 0x40) estado = 3;
                     else estado = 0;
                     printf("A RCV\t\n");
+
                 break;
 
-                case 3: //C_RCV
+                case 3:
+
                     if(current == 0x7E) estado = 1;
                     else if(current == (0x03 ^ 0x00) || current == (0x03 ^ 0x40)) estado = 4;
                     else  estado = 0;
                     printf("C RCV\t\n");
+
                 break;
 
-                case 4: // BCC1_OK
-
-                if(control == 0)
-                {
-
+                case 4: 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////control packet
+                if(control == 0){
                     if (indicator == 1){
                         printf("C --->  0x%02X   \n", current);
                         indicator ++;
@@ -532,11 +521,10 @@ int llread(unsigned char *buf) {
                     else if(indicator == 3){
 
                         if(finishnamefile== 0) printf("L1 --->  0x%02X    \n", current);
-                        
                         contnamefile = current+1;
-                        if(finishnamefile>0 && finishnamefile < contnamefile){
-                            data[finishnamefile-1] = current;  
-                        }
+
+                        if(finishnamefile>0 && finishnamefile < contnamefile) data[finishnamefile-1] = current;  
+        
                         if(finishnamefile == contnamefile){
                             printf("Name of file: ");
                             for(int i = 0; i < contnamefile; i++) {
@@ -547,10 +535,9 @@ int llread(unsigned char *buf) {
                             indicator ++;
                             break;
                         }
-                        
                     }
                     else if(indicator == 4){
-                       
+
                         printf("T2 --->  0x%02X    \n", current);
                         indicator ++;
                         break;
@@ -573,68 +560,61 @@ int llread(unsigned char *buf) {
                     }
                     finishnamefile++;
                 }
-
+///////////////////////////////////////////////////////////////////////////////////////////////////////////   
 
                 else if(control==1){
 
-                if(indicator == 1) {
-                    printf("0x%02X   ->  C: Type of Packet\n", current);
-                    indicator=2;
-                    
-                }
-                 else if(indicator == 2) {
-                    printf("Number of Packet --->  %d   \n", current+1);
-                    indicator=3;
-                    BCC2 ^= current;
-                }
-                else if(indicator == 3) {
-                    packetsize = current*256;
-                    indicator=4;
-                    
-                }
-                else if(indicator == 4) {
-                    packetsize += current;
-                    indicator=5;
-                   
-                    printf("Packet Size --->  %d\n", packetsize);
-                    break;
-                }
+                    if(indicator == 1) {
+                        printf("0x%02X   ->  C: Type of Packet\n", current);
+                        indicator=2;
+                    }
 
-                if(current == 0x7E) {
-                    estado = 5;
-                }
-                
-                
-                if (estado == 4 && indicator == 5){
-                    if(current == 0x7D){
-                        stuffing = 1;
+                    else if(indicator == 2) {
+                        printf("Number of Packet --->  %d   \n", current+1);
+                        indicator=3;
+                    }
+
+                    else if(indicator == 3) {
+                        packetsize = current*256;
+                        indicator=4;
+                    }
+
+                    else if(indicator == 4) {
+                        packetsize += current;
+                        indicator=5;
+                   
+                        printf("Packet Size --->  %d\n", packetsize);
                         break;
                     }
-                    if(stuffing == 1){
-                        stuffing = 0;
-                        if(current == 0x5E) data[data_pointer] = 0x7E;
-                        else if(current == 0x5D) data[data_pointer] = 0x7D;
-                        else {
-                            printf("Destuffung ERROR\n"); 
-                            estado = 5;
+
+                    if(current == 0x7E) estado = 5;
+                   
+                    if (estado == 4 && indicator == 5){
+                        if(current == 0x7D){
+                            stuffing = 1;
+                            break;
                         }
-                        data_pointer++;
-                        break;
-                    }
+
+                        if(stuffing == 1){
+                            stuffing = 0;
+                            if(current == 0x5E) data[data_pointer] = 0x7E;
+                            else if(current == 0x5D) data[data_pointer] = 0x7D;
+                            else {
+                                printf("Destuffung ERROR\n"); 
+                                estado = 5;
+                            }
+                            data_pointer++;
+                            break;
+                        }
                     data[data_pointer] = current;
                     data_pointer++;
                     //printf(" %c", current);
+                    }
                 }
-            
-            }
-                break;
-
-
-                case 5: // STOP
-                break;
+                break; 
             }
             
-            if(indicator<2) printf("0x%02X   ->  ", current); 
+  //        if(indicator<2) printf("0x%02X   ->  ", current); 
             if(estado == 4 && indicator == 1) printf("BCC1\t\n");
             if(estado == 5){ 
                 BCC2_read = data[data_pointer-1];
@@ -642,31 +622,31 @@ int llread(unsigned char *buf) {
                 printf("STOP\n\n"); 
                 break;
             }
-        }   
+        } 
+
         printf("Data READ: \n");
+
         data[data_pointer-1] = '\0';
-        for(int i = 0; i < data_pointer-1; i++) {
-            printf("0x%02X ", data[i]);
-        }
+
+        for(int i = 0; i < data_pointer-1; i++) printf("0x%02X ", data[i]);
+        
         BCC2 = 0;
-        for(int i = 0; i < data_pointer-1; i++) {
-            BCC2 ^= data[i];
-        }
+
+        for(int i = 0; i < data_pointer-1; i++) BCC2 ^= data[i];
+        
         printf("\nBCC2 CALCULATED: 0X%02X\n", BCC2);
 
-        
-
-        //if(BCC2 == BCC2_read) {
+        if(BCC2 == BCC2_read) {
             printf("BCC2 OK\n");
             buf1[0]=0x7E;
             buf1[1]=0x01;
             if(identifier == 0) {
                 buf1[2]=0x85;
-                //identifier = 1;
+                identifier = 1;
             }
             else if (identifier == 1) {
                 buf1[2]=0x05;
-                //identifier = 0;
+                identifier = 0;
             }
             buf1[3]=buf1[1]^buf1[2];
             buf1[4]=0x7E;
@@ -678,31 +658,28 @@ int llread(unsigned char *buf) {
             printf("\n%d bytes sent\n", bytes);
             contpacketsread++;
             
-                /*
+                
         }
         else {
             printf("\n\nBCC2 NOT OK\n\n");
             buf1[0]=0x7E;
             buf1[1]=0x01;
-            if(identifier == 0) {
-                buf1[2]=0x01;
-                identifier = 1;
-            }
-            else if (identifier == 1) {
-                buf1[2]=0x81;
-                identifier = 0;
-            }
+
+            if(identifier == 0) buf1[2]=0x01;
+            else if (identifier == 1) buf1[2]=0x81;
+            
             buf1[3]=buf[1]^buf[2];
             buf1[4]=0x7E;
             int bytes = write(fd, buf1, 5);
             printf("\n%d bytes sent\n", bytes);
+
+            return -1;
             
-        }   */
+        }   
 
         memcpy(buf, data, data_pointer);
-        
-        
-        return data_pointer-1;  
+
+        return data_pointer-1;  // return do tamanho do packet
 }
 
 
