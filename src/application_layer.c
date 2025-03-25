@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <math.h>
 
+#define PACKET_SIZE 256
 long int file_Size ;
 int numberofpacket;
 int remainer;
@@ -48,13 +49,15 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     else {
         printf("\n---------------------------Connection established!---------------------------\n");
     }
-    //filename = "ok.txt";
-   //unsigned char control_packet[7+strlen(filename)];
+   
+   unsigned char control_packet[7+strlen(filename)];
    
     switch (connectionParameters.role){ 
+
+        FILE *file;
+
         case  LlTx:
 
-            FILE *file;
             file = fopen(filename, "r");
 
             if (file == NULL) {
@@ -69,33 +72,33 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             printf("File name: %s\n", filename);
             printf("File size: %ld bytes\n", file_Size);
             
-            numberofpacket = file_Size / 256;
-            remainer = file_Size % 256;
+            numberofpacket = file_Size / PACKET_SIZE;
+            remainer = file_Size % PACKET_SIZE;
             printf("Number of Packets: %d\n", numberofpacket+1);
             printf("Last Packet Size: %d\n", remainer);
             int cont = 0;
 
-            ////////////////////////////////////////Create and send control packet//////////////////////////////////////////////////////  não está afuncionar em condições
-           /*
+            ////////////////////////////////////////Create and send control packet//////////////////////////////////////////////////////  
+           
             control_packet[0] = 2; // C
             control_packet[1] = 1; // T1
             control_packet[2] = strlen(filename); // L1
             for(int i = 0; i < strlen(filename); i++) control_packet[3+i] = filename[i]; // Name
             control_packet[3+strlen(filename)] = 2; // T2
             control_packet[4+strlen(filename)] = 4; // L2
-            control_packet[5+strlen(filename)] = numberofpacket +1 ; // Size file_Size / 256;
-            control_packet[6+strlen(filename)] = remainer; // Size file_Size % 256;
+            control_packet[5+strlen(filename)] = numberofpacket +1 ; // Size file_Size / PACKET_SIZE;
+            control_packet[6+strlen(filename)] = remainer; // Size file_Size % PACKET_SIZE;
             control_packet[7+strlen(filename)] = '\0'; // End of string
             
-            //printf("---------------------------CONTROL PACKET:--------------------------- \n");
-            //for (int i = 0; i < 7+strlen(filename); i++) printf("0X%02X ", control_packet[i]);
-            //printf("\n\n");
-            //llwrite(control_packet, 7+strlen(filename));*/
+            printf("---------------------------CONTROL PACKET:--------------------------- \n");
+            for (int i = 0; i < 8+strlen(filename); i++) printf("0X%02X ", control_packet[i]);
+            printf("\n\n");
+            if (llwrite(control_packet, 7+strlen(filename))==1){
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
             
             while (cont < numberofpacket + 1) {
                 
-                unsigned char packet[256 + 8] = {};
+                unsigned char packet[PACKET_SIZE + 8] = {};
                 packet[0] = 1; // C 
                 packet[1] = 0;// Número de sequência
 
@@ -108,9 +111,9 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                     packet[2] = 0;  
                     packet[3] = remainer; 
                 }
-                fseek(file, cont * 256, SEEK_SET);
+                fseek(file, cont * PACKET_SIZE, SEEK_SET);
             
-                size_t bytes_to_read = (cont == numberofpacket) ? remainer : 256;
+                size_t bytes_to_read = (cont == numberofpacket) ? remainer : PACKET_SIZE;
                 size_t bytes_read = fread(&packet[4], 1, bytes_to_read, file);
             
                 unsigned char BCC2 = 0;
@@ -130,9 +133,32 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                 cont++;
                 
             }
+        }
+
+        ////////////////////////////////////////Create and send control packet//////////////////////////////////////////////////////  
+           
+        control_packet[0] = 3; // C
+        control_packet[1] = 1; // T1
+        control_packet[2] = strlen(filename); // L1
+        for(int i = 0; i < strlen(filename); i++) control_packet[3+i] = filename[i]; // Name
+        control_packet[3+strlen(filename)] = 2; // T2
+        control_packet[4+strlen(filename)] = 4; // L2
+        control_packet[5+strlen(filename)] = numberofpacket +1 ; // Size file_Size / PACKET_SIZE;
+        control_packet[6+strlen(filename)] = remainer; // Size file_Size % PACKET_SIZE;
+        control_packet[7+strlen(filename)] = '\0'; // End of string
+        
+        printf("\n---------------------------CONTROL PACKET:--------------------------- \n");
+        for (int i = 0; i < 7+strlen(filename); i++) printf("0X%02X ", control_packet[i]);
+        printf("\n\n");
+        llwrite(control_packet, 7+strlen(filename));
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        
+            
                
             printf("\n---------------------------File sent!---------------------------\n");
             fclose(file);
+            llclose(0);
         break;
     
 
@@ -140,6 +166,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             unsigned char *packet = (unsigned char *)malloc(MAX_PAYLOAD_SIZE); // Alocação de memória para o pacote
             long int cont = 0;
             int tamanho;
+
+            llread(packet); // Recebe o pacote de controlo
             
             FILE* file = fopen(filename, "wb");
             if (file == NULL) {
@@ -154,19 +182,30 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                 
 
                 printf("\nRECEIVED DATA PACKET NUMBER: %ld\n", cont);
-                printf("Packet size: %d\n", tamanho);
+                //printf("Packet size: %d\n", tamanho);
 
-                if(tamanho == -1) continue;
+                if(tamanho == -1) {
+                    cont--;
+                    continue;
+                }
                 
-                if(tamanho<256) { 
+                if(tamanho<PACKET_SIZE) { 
                     fwrite(packet, 1, tamanho, file);
                     fclose(file);
                     printf("\n---------------------------File received!---------------------------\n");
                     break;
                     }
 
-                fwrite(packet, 1, 256, file);
+                fwrite(packet, 1, PACKET_SIZE, file);
             }
+            llread(packet); // Recebe o pacote de controlo
+            
+            llclose(0);
         } 
     }   
+
+
+    printf("\n/////////////////////////////////////////////////////////////////////\n");
+    printf("/////////////////////////////////////////////////////////////////////\n");
+    printf("/////////////////////////////////////////////////////////////////////\n\n");
 }

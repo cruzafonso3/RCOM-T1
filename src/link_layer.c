@@ -22,7 +22,7 @@
 #define FALSE 0
 #define TRUE 1
 #define BUF_SIZE 5
-#define MAX_FRAME_SIZE 256
+#define PACKET_SIZE 256
 
 int contpacketsread = 0;
 volatile int STOP = FALSE;
@@ -30,8 +30,14 @@ int alarmEnabled = FALSE;
 int alarmCount = 0;
 int ab = 0;
 int fd = 0;
-int identifier = 0;  //  = 0 se I(0) e = 1 se I(1)
-int control = 1; // 1 se já tiver sido mandado um controlo e 0 se ainda não tiver sido mandado
+int identifier = 1;  //  = 0 se I(0) e = 1 se I(1)
+int control = 0; // 1 se já tiver sido mandado um controlo e 0 se ainda não tiver sido mandado
+int contcurrent=0;
+
+int port = 0; // 0 se for a porta TX e 1 se for a porta RX
+
+int control2 = 0;
+
 
 
 int startconnection(const char *serialPort) {
@@ -82,6 +88,8 @@ int llopen(LinkLayer connectionParameters)
     unsigned char buf[5] = {0};
     unsigned char buf1[5] = {0};
 
+    port = connectionParameters.role;
+
     // TX
     if(connectionParameters.role == LlTx) {
         (void) signal(SIGALRM, alarmHandler);
@@ -94,7 +102,7 @@ int llopen(LinkLayer connectionParameters)
         buf[4] = 0x7E;
     
         int bytes = write(fd, buf, BUF_SIZE);
-        printf("%d bytes sent\n", bytes);
+        //printf("%d bytes sent\n", bytes);
     
         int estado = 0;
         unsigned char current;
@@ -245,7 +253,7 @@ int llopen(LinkLayer connectionParameters)
         buf1[3]=0x01^0x07;
         buf1[4]=0x7E;
         int bytes = write(fd, buf1, BUF_SIZE);
-        printf("\n%d bytes sent\n", bytes);
+        //printf("\n%d bytes sent\n", bytes);
 
     }  
 
@@ -257,12 +265,12 @@ int llopen(LinkLayer connectionParameters)
 ////////////////////////////////////////////////
 
 int llwrite(const unsigned char *buf, int bufSize) {
-
+    //printf("\n\nCONTROL: %d\n\n",control);
     alarmCount = 0;
     alarmEnabled = FALSE;
 
-    int packet_size = bufSize + 100; 
-    unsigned char packet[packet_size];
+    
+    unsigned char packet[PACKET_SIZE + 100] = {};
     unsigned int finalsize = 4;
     
     packet[0] = 0x7E; 
@@ -295,7 +303,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
     packet[j++] = 0x7E;
     finalsize++;
     if(control == 0) printf("\n\n---------------------------CONTROL PACK LLWRITE: %d ---------------------------\n\n",finalsize);
-    else printf("\n\n---------------------------STARTING LLWRITE: packet with %d bytes---------------------------\n\n", finalsize-12);
+    else printf("\n\n---------------------------STARTING LLWRITE: packet with %d bytes---------------------------\n\n", finalsize-6);
     for (int i = 0; i < finalsize; i++)  printf("0x%02X ", packet[i]);
     printf("\n------------------------------------\n\n");
     
@@ -313,7 +321,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
 
     while (attempts < 3) { 
         int bytes = write(fd, packet, finalsize-2);
-        printf("%d bytes sent\n", bytes-12);
+        //printf("%d bytes sent\n", bytes-12);
 
         alarmEnabled = TRUE;
         alarm(3);
@@ -327,12 +335,13 @@ int llwrite(const unsigned char *buf, int bufSize) {
                 
                 
 
-                if (alarmCount >= 5){
+                if (alarmCount >= 7){
                     printf("Maximum attempts reached. Aborting.\n");
                     return -1; // Falha após 3 tentativas
                 }
-
-                printf("Alarm #%d\n", alarmCount);
+                
+                if(alarmCount==1) printf("----> WARNING : CONNECTION LOST <----\n");
+                if(alarmCount >0)printf("Alarm #%d\n", alarmCount);
                 if(alarmEnabled && alarmCount>0) write(fd, packet, finalsize); 
                 if(alarmEnabled && alarmCount>0) printf("RESENDING...\n\n");
                 
@@ -352,7 +361,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
 
                     case 1: 
 
-                        printf("FLAG_RCV\n");
+                        //printf("FLAG_RCV\n");
                         if (current == 0x01) estado = 2;   
                         else if (current == 0x7E) estado = 1; 
                         else estado = 0;
@@ -361,7 +370,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
 
                     case 2:
 
-                        printf("A_RCV\n");
+                        //printf("A_RCV\n");
                         if ((current == 0x05) || (current == 0x85)) {
                             RRorREJ = 0;
                             estado = 3;
@@ -374,6 +383,11 @@ int llwrite(const unsigned char *buf, int bufSize) {
                             estado = 3;   
                             printf("REJ(%d) Recieved\n",identifier);
 
+                            
+            //////////////////////////////////////////////////////////////////////                            
+                            alarm(3);
+                            write(fd, packet, finalsize); 
+            ////////////////////////////////////////////////////////////////////////                
                         } 
 
 
@@ -384,7 +398,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
 
                     case 3: 
 
-                        printf("C_RCV\n");
+                        //printf("C_RCV\n");
                         if (current == 0x04 || current == 0x84 ) estado = 4;
                         else estado = 0; 
 
@@ -392,7 +406,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
 
                     case 4:
 
-                        printf("BCC1_OK\n");
+                        //printf("BCC1_OK\n");
                         if (current == 0x7E) { 
                             estado = 5; 
                             printf("STOP\n");
@@ -402,11 +416,17 @@ int llwrite(const unsigned char *buf, int bufSize) {
 
                 if (estado == 5) {
                     alarm(0); 
-                    
-                    if(RRorREJ==0) printf("-------- Success: Packet I(%d) read -------\n",identifier);
+
                     if(RRorREJ==1) printf("-------- Error: Packet I(%d) read -------\n",identifier);
+
+                    if(identifier) identifier = 0;
+                    else identifier = 1;
+                    if(RRorREJ==0) printf("-------- Success: Packet I(%d) read -------\n",identifier);
                     if(control == 0) control = 1;
                     alarmCount = 0;
+
+                    if(identifier) identifier = 0;
+                    else identifier = 1;
                     
                     return 1; 
                 }
@@ -427,7 +447,15 @@ int llwrite(const unsigned char *buf, int bufSize) {
 // LLREAD
 ////////////////////////////////////////////////
 int llread(unsigned char *buf) { 
-    printf("\n\n---------------------------  I(%d)  ---------------------------\n\n",identifier);
+    
+
+    
+  
+    //printf("\n\nCONTROL: %d\n\n",control);
+
+    if(!control){printf("\n\n---------------------------CONTROL PACKET READ---------------------------\n\n");}
+    else printf("\n\n---------------------------  I(%d)  ---------------------------\n\n",identifier);
+    
     
     int indicator = 1;
     int stuffing=0;
@@ -436,7 +464,7 @@ int llread(unsigned char *buf) {
     int BCC2_read = 0;
     int data_pointer = 0; 
     int packetsize = 0;
-        unsigned char data[300] = {};
+        unsigned char data[PACKET_SIZE+100] = {};
         unsigned char buf1[6];
         unsigned char current = 0;
         /**/
@@ -444,9 +472,14 @@ int llread(unsigned char *buf) {
         timeout.tv_sec = 10;  // Timeout de 10 segundos
         timeout.tv_usec = 0;
         
+        if(control){
         printf("\n         ///////////////////////////////////////////////");  
-        printf("\n         //////// Start Reading Packet nº %d ///////////\t\n",contpacketsread+1); 
+        printf("\n         //////// Start Reading Packet nº %d /////////\t\n",contpacketsread); 
         printf("         ///////////////////////////////////////////////\n\n");   
+    }
+
+        int contnamefile = 0;
+        int finishnamefile = 0;
         
         while(1)
         {
@@ -466,8 +499,7 @@ int llread(unsigned char *buf) {
             if (ab == -1) continue;
             
             
-            int contnamefile = 0;
-            int finishnamefile = 0;
+            
             switch (estado)
             {
                 case 0:
@@ -505,10 +537,13 @@ int llread(unsigned char *buf) {
                 break;
 
                 case 4: 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////control packet
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////control packet 
                 if(control == 0){
+                    
                     if (indicator == 1){
-                        printf("C --->  0x%02X   \n", current);
+                        
+                        if (current == 2) printf("C --->  0x%02X  -START- \n", current);
+                        if (current == 3) printf("C --->  0x%02X  -STOP- \n", current);
                         indicator ++;
                         break;
                     }
@@ -520,14 +555,18 @@ int llread(unsigned char *buf) {
                     }    
                     else if(indicator == 3){
 
-                        if(finishnamefile== 0) printf("L1 --->  0x%02X    \n", current);
-                        contnamefile = current+1;
-
-                        if(finishnamefile>0 && finishnamefile < contnamefile) data[finishnamefile-1] = current;  
+                        if(finishnamefile== 0) {
+                            printf("L1 --->  0x%02X    \n", current);
+                            contnamefile = current;
+                        }
+                       
+                        
+                        if(finishnamefile>0 && finishnamefile <= contnamefile+1) data[finishnamefile] = current;
+                        finishnamefile++; 
         
-                        if(finishnamefile == contnamefile){
+                        if(finishnamefile == contnamefile+1){
                             printf("Name of file: ");
-                            for(int i = 0; i < contnamefile; i++) {
+                            for(int i = 1; i < contnamefile+2; i++) {
                                 printf("%c", data[i]);
                             }
                             printf("\n");
@@ -535,6 +574,7 @@ int llread(unsigned char *buf) {
                             indicator ++;
                             break;
                         }
+                        
                     }
                     else if(indicator == 4){
 
@@ -548,7 +588,7 @@ int llread(unsigned char *buf) {
                         indicator ++;
                         break;
                     }
-                    else if(indicator == 6){
+                    else if(indicator == 6 || indicator == 7){
                        
                         printf("V2 --->  0x%02X    \n", current);
                         indicator ++;
@@ -558,24 +598,25 @@ int llread(unsigned char *buf) {
                     if(current == 0x7E) {
                         estado = 5;
                     }
-                    finishnamefile++;
+                    
                 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////   
 
-                else if(control==1){
+                if(control==1){
 
                     if(indicator == 1) {
                         printf("0x%02X   ->  C: Type of Packet\n", current);
                         indicator=2;
+                        contcurrent++;
                     }
 
                     else if(indicator == 2) {
-                        printf("Number of Packet --->  %d   \n", current+1);
+                        printf("Number of Packet --->  %d   \n", contcurrent);
                         indicator=3;
                     }
 
                     else if(indicator == 3) {
-                        packetsize = current*256;
+                        packetsize = current* PACKET_SIZE;
                         indicator=4;
                     }
 
@@ -613,10 +654,13 @@ int llread(unsigned char *buf) {
                 }
                 break; 
             }
+
+            
             
   //        if(indicator<2) printf("0x%02X   ->  ", current); 
             if(estado == 4 && indicator == 1) printf("BCC1\t\n");
             if(estado == 5){ 
+                
                 BCC2_read = data[data_pointer-1];
                 printf("0x%02X   ->  BCC2 READ\t\n",BCC2_read);
                 printf("STOP\n\n"); 
@@ -624,7 +668,10 @@ int llread(unsigned char *buf) {
             }
         } 
 
-        printf("Data READ: \n");
+
+        
+        
+        if(control) printf("Data READ: \n");
 
         data[data_pointer-1] = '\0';
 
@@ -632,7 +679,17 @@ int llread(unsigned char *buf) {
         
         BCC2 = 0;
 
-        for(int i = 0; i < data_pointer-1; i++) BCC2 ^= data[i];
+        if(control)for(int i = 0; i < data_pointer-1; i++) BCC2 ^= data[i];
+
+        if(control && control2) if(data_pointer < PACKET_SIZE) control = 0;
+
+        if (!control && !control2) {
+            control = 1;
+            control2 = 1;
+        }
+        if(control && !control2) control2 = 1;
+
+       
         
         printf("\nBCC2 CALCULATED: 0X%02X\n", BCC2);
 
@@ -653,10 +710,11 @@ int llread(unsigned char *buf) {
             for(int i = 0; i < 5; i++) {
                 printf("0x%02X ", buf1[i]);
             }
-            //sleep(1);
             int bytes = write(fd, buf1, 5);
-            printf("\n%d bytes sent\n", bytes);
+            //printf("\n%d bytes sent\n", bytes+2);
             contpacketsread++;
+
+            
             
                 
         }
@@ -664,6 +722,7 @@ int llread(unsigned char *buf) {
             printf("\n\nBCC2 NOT OK\n\n");
             buf1[0]=0x7E;
             buf1[1]=0x01;
+            contcurrent--;
 
             if(identifier == 0) buf1[2]=0x01;
             else if (identifier == 1) buf1[2]=0x81;
@@ -671,13 +730,22 @@ int llread(unsigned char *buf) {
             buf1[3]=buf[1]^buf[2];
             buf1[4]=0x7E;
             int bytes = write(fd, buf1, 5);
-            printf("\n%d bytes sent\n", bytes);
-
+            //printf("\n%d bytes sent\n", bytes);
+            control = 1;
+            control2 = 0;
+            
             return -1;
             
         }   
-
+        
+        
+        
         memcpy(buf, data, data_pointer);
+        
+
+      
+        //printf("datapoiter: %d\n",data_pointer);
+        
 
         return data_pointer-1;  // return do tamanho do packet
 }
@@ -688,8 +756,258 @@ int llread(unsigned char *buf) {
 ////////////////////////////////////////////////
 int llclose(int showStatistics)
 {
-    // TODO
+    unsigned char buf[5] = {0};
+    unsigned char buf1[5] = {0};
 
+    if(port == LlTx) {
+        (void) signal(SIGALRM, alarmHandler);
+        printf("New termios structure set\n");
+    
+        buf[0] = 0x7E;
+        buf[1] = 0x03;  
+        buf[2] = 0x0B;  
+        buf[3] = 0x03 ^ 0x0B;  
+        buf[4] = 0x7E;
+    
+        int bytes = write(fd, buf, BUF_SIZE);
+        //bytes sent\n", bytes);
+    
+        int estado = 0;
+        unsigned char current;
+        alarm(3);  
+        printf("\nSending DISC FRAME:\t\n\n");   
+    
+        while(1) {
+            if (alarmEnabled) {
+                
+                write(fd, buf, BUF_SIZE);
+    
+                if (alarmCount > 3) {
+                    printf("Maximum attempts reached. Aborting.\n");
+                    return -1;
+                }
+                printf("Alarm #%d\n", alarmCount);
+                printf("WAITING RESPONSE...\n\n");
+                
+
+                alarmEnabled = FALSE;
+                alarm(3);
+            }
+    
+            
+            if (read(fd, &current, 1) > 0) {
+                
+    
+                switch (estado) {
+                    case 0:  // START
+                        if (current == 0x7E) estado = 1;
+                        printf("\nRECIEVING DISC FRAME\t\n"); 
+                         
+                    break;
+    
+                    case 1:  // FLAG_RCV
+                        if (current == 0x01) estado = 2;
+                        else if (current != 0x7E) estado = 0;
+                        printf("FLAG_RCV\t\n");
+
+                    break;
+    
+                    case 2:  // A_RCV
+                        if (current == 0x0B) estado = 3;
+                        else if (current == 0x7E) estado = 1;
+                        else estado = 0;
+                        printf("A RCV\t\n");
+                    break;
+    
+                    case 3:  // C_RCV
+                        if (current ==(0x0B^0x01)) estado = 4;
+                        else estado = 0;
+                        printf("C RCV\t\n");
+                    break;
+    
+                    case 4:  // BCC1_OK
+                        if (current == 0x7E) {
+                            alarm(0);  // Cancela o alarme
+                            printf("BCC OK\t\n");
+                            estado = 5;
+                        }
+                    break;
+                }
+
+                printf("0x%02X   ->  ", current); 
+                if (estado == 5) {
+                    printf("DISC FRAME RECIEVED\n");
+                    break;
+                }
+
+                
+                
+            }  
+        }
+            buf1[0]=0x7E;
+                buf1[1]=0x03;
+                buf1[2]=0x07;
+                buf1[3]=0x03^0x07;
+                buf1[4]=0x7E;
+                printf("\nSending UA FRAME:\t\n\n"); 
+                bytes = write(fd, buf1, BUF_SIZE);
+                //printf("\n%d bytes sent\n", bytes);
+                estado = 0;
+                alarm(0);
+                
+                return showStatistics;
+    }    
+
+
+    // RX
+    else if(port==LlRx){
+        int estado = 0;
+        unsigned char current = 0;
+
+        struct timeval timeout;
+        timeout.tv_sec = 5;  // Timeout de 60 segundos
+        timeout.tv_usec = 0;
+
+        while(1)
+        {
+            fd_set read_fds;
+            FD_ZERO(&read_fds);
+            FD_SET(fd, &read_fds);
+
+            int ret = select(fd + 1, &read_fds, NULL, NULL, &timeout);
+            if (ret == 0) {
+            printf("DISC FRAME ERROR\n");
+            return -1;
+            }   else if (ret == -1) {
+                perror("select");
+                exit(-1);
+            }
+
+
+            ab = read(fd, &current, 1);
+            if (ab == -1) continue;
+
+            switch (estado)
+            {
+                case 0: // START
+                    if(current==0x7E) estado = 1;
+                    printf("\nRECIEVING DISC FRAME\t\n");    
+                break;
+
+                case 1: // FLAG_RCV
+                    if(current == 0x7E) estado = 1;
+                    else if(current == 0x03) estado = 2;
+                    else estado = 0;
+                    printf("FLAG_RCV\t\n");
+                break;
+
+                case 2: //A_RCV
+                    if(current == 0x7E) estado = 1;
+                    else if(current == 0x0B) estado = 3;
+                    else estado = 0;
+                    printf("A RCV\t\n");
+                break;
+
+                case 3: //C_RCV
+                    if(current == 0x7E) estado = 1;
+                    else if(current == (0x0B ^ 0x03)) estado = 4;
+                    else  estado = 0;
+                    printf("C RCV\t\n");
+                break;
+
+                case 4: // BCC1_OK
+                if(current == 0x7E) estado = 5;
+                else estado = 0;
+                printf("BCC OK\t\n");
+                break;
+
+                case 5: // STOP
+                break;
+            }
+
+            printf("0x%02X   ->  ", current); 
+            if(estado == 5){ 
+                printf("DISC FRAME RECIEVED\n"); 
+                break;
+            }
+        }   
+
+        buf1[0]=0x7E;
+        buf1[1]=0x01;
+        buf1[2]=0x0B;
+        buf1[3]=0x01^0x0B;
+        buf1[4]=0x7E;
+        int bytes = write(fd, buf1, BUF_SIZE);
+        //printf("\n%d bytes sent\n", bytes);
+        estado = 0;
+
+
+        while(1)
+        {
+            
+            fd_set read_fds;
+            FD_ZERO(&read_fds);
+            FD_SET(fd, &read_fds);
+
+            int ret = select(fd + 1, &read_fds, NULL, NULL, &timeout);
+            if (ret == 0) {
+            printf("DISC FRAME ERROR\n");
+            return -1;
+            }   else if (ret == -1) {
+                perror("select");
+                exit(-1);
+            }
+
+
+            ab = read(fd, &current, 1);
+            if (ab == -1) continue;
+
+            switch (estado)
+            {
+                case 0: // START
+                    if(current==0x7E) estado = 1;
+                    printf("\nRECIEVING UA FRAME\t\n");    
+                break;
+
+                case 1: // FLAG_RCV
+                    if(current == 0x7E) estado = 1;
+                    else if(current == 0x03) estado = 2;
+                    else estado = 0;
+                    printf("FLAG_RCV\t\n");
+                break;
+
+                case 2: //A_RCV
+                    if(current == 0x7E) estado = 1;
+                    else if(current == 0x07) estado = 3;
+                    else estado = 0;
+                    printf("A RCV\t\n");
+                break;
+
+                case 3: //C_RCV
+                    if(current == 0x7E) estado = 1;
+                    else if(current == (0x07 ^ 0x03)) estado = 4;
+                    else  estado = 0;
+                    printf("C RCV\t\n");
+                break;
+
+                case 4: // BCC1_OK
+                if(current == 0x7E) estado = 5;
+                else estado = 0;
+                printf("BCC OK\t\n");
+                break;
+
+                case 5: // STOP
+                break;
+            }
+
+            printf("0x%02X   ->  ", current); 
+            if(estado == 5){ 
+                printf("UA FRAME RECIEVED\n\n\n"); 
+                break;
+            }
+        } 
+    }  
     return 1;
 }
+
 
